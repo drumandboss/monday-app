@@ -1,5 +1,5 @@
 /* global chrome */
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 // --- BOARD IDs ---
 const BOARD_IDS = {
@@ -10,14 +10,6 @@ const BOARD_IDS = {
     TASKS: 8575873550,
 };
 
-// --- Helper Components ---
-const Icon = ({ path }) => (<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" style={{width: '1.5rem', height: '1.5rem'}}><path d={path} /></svg>);
-const BrainIcon = () => <Icon path="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L8 12v1c0 1.1.9 2 2 2v1.93zm6.85-2.57c-.64.64-1.49 1.1-2.42 1.34V18c0-1.1-.9-2-2-2v-1l1.79-1.79c.13-.13.21-.3.21-.47V12h-2v-.17c0-.28-.11-.55-.3-.74L8.41 9.3c-.13-.13-.21-.3-.21-.47V8h2c1.1 0 2-.9 2-2V5.07c3.95.49 7 3.85 7 7.93 0 1.57-.46 3.03-1.26 4.28l-.11.17z" />;
-const SyncIcon = ({ isSyncing }) => <div style={{ animation: isSyncing ? 'spin 1s linear infinite' : 'none' }}><Icon path="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" /></div>;
-const UploadIcon = () => <Icon path="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z" />;
-const Spinner = () => (<div style={{animation: 'spin 1s linear infinite', borderRadius: '9999px', height: '1.5rem', width: '1.5rem', borderBottom: '2px solid white'}}></div>);
-
-// --- Main App Component ---
 export default function App() {
     const [mondayApiKey, setMondayApiKey] = useState('');
     const [geminiApiKey, setGeminiApiKey] = useState('');
@@ -26,89 +18,66 @@ export default function App() {
     const [imagePreview, setImagePreview] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
     const [isSyncing, setIsSyncing] = useState(false);
-    const [boardContext, setBoardContext] = useState(null);
+    const [companiesContext, setCompaniesContext] = useState([]);
     const [lastSyncTime, setLastSyncTime] = useState(null);
-    const [taskBoardOptions, setTaskBoardOptions] = useState({ status: [], priority: [] });
     const [proposedTasks, setProposedTasks] = useState([]);
     const [statusMessage, setStatusMessage] = useState({ type: '', text: '' });
+    const [showSettings, setShowSettings] = useState(false);
+    const [showCompanies, setShowCompanies] = useState(false);
     const [isDragging, setIsDragging] = useState(false);
 
-    const handleSyncContext = useCallback((isBackground = false) => {
+    // --- SYNC MONDAY.COM CONTEXT ---
+    const handleSyncContext = useCallback(() => {
         if (!mondayApiKey) {
-            if (!isBackground) setStatusMessage({ type: 'error', text: 'Please enter and save your monday.com API Key.' });
+            setStatusMessage({ type: 'error', text: 'Please enter your monday.com API Key.' });
             return;
         }
         setIsSyncing(true);
-        if (!isBackground) setStatusMessage({ type: '', text: '' });
-        
-        const idsToSync = Object.values(BOARD_IDS);
+        setStatusMessage({ type: '', text: '' });
+
         const query = `
-            query SyncBoards($boardIds: [ID!]) {
-                boards(ids: $boardIds) {
-                    id
-                    name
-                    items_page(limit: 500) {
-                        items {
+        query SyncBoards($boardIds: [ID!]) {
+            boards(ids: $boardIds) {
+                id
+                name
+                items_page(limit: 500) {
+                    items {
+                        id
+                        name
+                        column_values(ids: ["text_mkkk3hmx"]) {
                             id
-                            name
-                            column_values(ids: ["text_mkkk3hmx"]) {
-                                id
-                                text
-                            }
+                            text
                         }
                     }
-                    columns {
-                        id
-                        title
-                        settings_str
-                    }
                 }
-            }`;
+            }
+        }`;
 
-        chrome.runtime.sendMessage({ type: 'mondayApiCall', apiKey: mondayApiKey, query, variables: { boardIds: idsToSync } }, (response) => {
-            if (chrome.runtime.lastError || !response || !response.success) {
-                const errorMsg = response?.error || chrome.runtime.lastError?.message || "Unknown error during sync.";
-                if (!isBackground) setStatusMessage({ type: 'error', text: `Sync failed: ${errorMsg}` });
-                setIsSyncing(false);
+        chrome.runtime.sendMessage({ type: 'mondayApiCall', apiKey: mondayApiKey, query, variables: { boardIds: [BOARD_IDS.COMPANIES] } }, (response) => {
+            setIsSyncing(false);
+            if (!response?.success) {
+                setStatusMessage({ type: 'error', text: 'Failed to sync companies: ' + (response?.error || 'Unknown error') });
+                setCompaniesContext([]);
                 return;
             }
-
             try {
-                const { boards } = response.data;
-                const getBoard = (id) => boards.find(b => b.id === id);
-
-                const companiesBoard = getBoard(BOARD_IDS.COMPANIES);
-                const tasksBoard = getBoard(BOARD_IDS.TASKS);
-
-                let context = "BUSINESS CONTEXT:\n";
-                const companyItems = companiesBoard?.items_page?.items || [];
-                const allCompanies = companyItems.map(item => {
-                    const codeCol = item.column_values.find(c => c.id === 'text_mkkk3hmx');
-                    return { name: item.name, code: codeCol?.text || 'N/A' };
-                });
-                
-                context += "--- ALL COMPANIES (Source of Truth) ---\n" + allCompanies.map(c => `${c.name} (Code: ${c.code})`).join('\n') + "\n\n";
-                setBoardContext(context);
-                
-                if (tasksBoard && tasksBoard.columns) {
-                    const options = { status: [], priority: [] };
-                    const statusCol = tasksBoard.columns.find(c => c.id === 'status');
-                    const priorityCol = tasksBoard.columns.find(c => c.id === 'priority');
-                    if (statusCol?.settings_str) { try { options.status = Object.values(JSON.parse(statusCol.settings_str).labels); } catch (e) {} }
-                    if (priorityCol?.settings_str) { try { options.priority = Object.values(JSON.parse(priorityCol.settings_str).labels); } catch (e) {} }
-                    setTaskBoardOptions(options);
-                }
-
+                const board = response.data.boards[0];
+                const items = board?.items_page?.items || [];
+                const companies = items.map(item => ({
+                    name: item.name,
+                    code: item.column_values[0]?.text?.toUpperCase?.() || '',
+                })).filter(c => c.name && c.code);
+                setCompaniesContext(companies);
                 setLastSyncTime(new Date());
-                if (!isBackground) setStatusMessage({ type: 'success', text: 'Business context synced successfully!' });
+                setStatusMessage({ type: 'success', text: 'Companies loaded successfully!' });
             } catch (e) {
-                if (!isBackground) setStatusMessage({ type: 'error', text: 'Error processing synced data.' });
-            } finally {
-                setIsSyncing(false);
+                setCompaniesContext([]);
+                setStatusMessage({ type: 'error', text: 'Error processing companies.' });
             }
         });
     }, [mondayApiKey]);
 
+    // --- ON LOAD, LOAD API KEYS AND CONTEXT ---
     useEffect(() => {
         if (window.chrome && chrome.storage && chrome.storage.local) {
             chrome.storage.local.get(['geminiApiKey', 'mondayApiKey'], (result) => {
@@ -117,63 +86,58 @@ export default function App() {
             });
         }
     }, []);
-
     useEffect(() => {
-        if (mondayApiKey) {
-            handleSyncContext(true);
-            const intervalId = setInterval(() => handleSyncContext(true), 300000);
-            return () => clearInterval(intervalId);
-        }
-    }, [mondayApiKey, handleSyncContext]);
+        if (mondayApiKey) handleSyncContext();
+        // eslint-disable-next-line
+    }, [mondayApiKey]);
 
+    // --- SAVE SETTINGS ---
     const handleSaveSettings = () => {
         if (window.chrome && chrome.storage && chrome.storage.local) {
             chrome.storage.local.set({ geminiApiKey, mondayApiKey }, () => {
                 setStatusMessage({ type: 'success', text: 'Settings saved!' });
-                handleSyncContext(false);
+                handleSyncContext();
             });
         }
     };
 
+    // --- GENERATE TASKS ---
     const handleGenerateTask = async () => {
         if (!geminiApiKey) { setStatusMessage({ type: 'error', text: 'Please add your Google AI API Key.' }); return; }
         if (!userInput && !imageFile) { return; }
         setIsLoading(true); setProposedTasks([]);
-        
-        const mainPrompt = `You are an expert AI task processor. Your only job is to analyze a user's request, find a matching company from the provided context, and create a prefixed task name.
 
-            ${boardContext || "No business context available."}
+        // All companies string for the prompt
+        const allCompaniesString = companiesContext.length > 0
+            ? companiesContext.map(c => `${c.name} (Code: ${c.code})`).join('\n')
+            : 'No companies loaded!';
 
-            **YOUR TASK IS TO FIND THE CORRECT PREFIX. FOLLOW THESE STEPS:**
+        // Main Prompt
+        const mainPrompt = `
+You are an AI assistant for a digital agency using monday.com.
+Your job is to analyze a user’s request (text and/or screenshot) and determine the correct client company from the provided business context.
 
-            **Step 1: Search for a Company in the User's Request.**
-            - Read the user's request carefully.
-            - Scour the "ALL COMPANIES" list from the context to find a matching company name. This is your highest priority.
-            - Your matching MUST be flexible: ignore case and minor typos (e.g., "skidrow studio" should match "Skidrow Studios").
+**IMPORTANT:** If any part of a company name in the ALL COMPANIES list appears in the user request (even partially), use that company's official code. Do not abbreviate, do not invent codes. Match case-insensitive, partial names, and typos.
 
-            **Step 2: Assign a Prefix based on the Search Result.**
-            - **A) If a matching company IS FOUND in the "ALL COMPANIES" list:**
-                - You MUST extract its corresponding code from the context.
-                - If the code is valid and not 'N/A', THAT CODE is your prefix.
-                - If the found company's code is 'N/A', use NO prefix.
-            
-            - **B) If NO matching company IS FOUND after searching the entire list:**
-                - The task is internal. Assign an internal prefix.
-                - Use \`SYS\` for systems, IT, or automations.
-                - Use \`OPS\` for internal operations or processes.
-                - Use \`BIZDEV\` for general sales or business development activities that do not mention any company.
-            
-            - **C) If NO prefix applies after all checks, use NO prefix.**
+ALL COMPANIES (always up to date): 
+${allCompaniesString}
 
-            **CRITICAL RULE:** You are forbidden from inventing, guessing, or creating a client code from a name. Your only job is to find the pre-existing code from the context.
-
-            **Step 3: Format the Final JSON Output.**
-            - Your output **MUST** be a JSON object: \`{ "tasks": [ { "task_name": "string", "description": "string", "status": "string", "priority": "string" } ] }\`
-            - For \`task_name\`, combine the prefix and " > " with the user's original text. Example: "CODE > build catalog for some company".
-            - For \`description\`, use the user's original text.
-            - For \`status\` and \`priority\`, suggest one of these valid options if possible: ${JSON.stringify(taskBoardOptions)}. Default to "Needs Action" and "Medium".
-
-            Analyze the user's request and provide the JSON.`;
+Instructions:
+1. If an image is provided, perform OCR and extract visible text (especially any company or sender names).
+2. Search for a client/company name in the user’s request or screenshot, using the ALL COMPANIES list above (case/typo tolerant, partial match allowed).
+   - If a match is found, extract the official code (from above) and use it as a prefix in the task name.
+   - Never invent codes. Use only codes from the list.
+3. If no match, use:
+   - SYS for system/internal/automation
+   - OPS for general agency ops
+   - BIZDEV for business development tasks with no client mentioned
+4. Never use "OPS" if the text appears to be from a client or about a client.
+5. Summarize the core need in a clear task title. The description should be a concise summary, not just a copy-paste.
+6. Output: JSON like {"tasks": [ { "task_name": "CODE > short task summary", "description": "short, clear explanation or question for the team", "status": "Needs Action", "priority": "Medium" } ]}
+---
+User Input: ${userInput ? `Text: "${userInput}"` : ""}
+${imageFile ? "Image: provided (run OCR and extract company name if present)" : ""}
+`;
 
         try {
             const userParts = [{ text: mainPrompt }];
@@ -182,9 +146,8 @@ export default function App() {
                 const base64ImageData = await fileToBase64(imageFile);
                 userParts.push({ text: "User Request Image:" }, { inlineData: { mimeType: imageFile.type, data: base64ImageData } });
             }
-
             const payload = { contents: [{ role: "user", parts: userParts }], generationConfig: { responseMimeType: "application/json" } };
-            
+
             chrome.runtime.sendMessage({ type: 'generateTasks', payload, apiKey: geminiApiKey }, (response) => {
                 setIsLoading(false);
                 if (!response?.success) {
@@ -196,11 +159,9 @@ export default function App() {
                     setStatusMessage({ type: 'error', text: 'AI returned an empty proposal.' });
                     return;
                 }
-                
                 try {
                     const jsonString = rawText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
                     const result = JSON.parse(jsonString);
-
                     if (result?.tasks?.length > 0) {
                         setProposedTasks(result.tasks.map(task => ({ ...task, id: crypto.randomUUID() })));
                     } else {
@@ -216,107 +177,176 @@ export default function App() {
         }
     };
 
-    const handleApproveTask = (taskToApprove) => {
-        setStatusMessage({ type: '', text: `Approving "${taskToApprove.task_name}"...` });
-        
+    // --- SEND TASK TO MONDAY.COM ---
+    const handleApproveTask = (task) => {
+        setStatusMessage({ type: '', text: `Approving "${task.task_name}"...` });
+
+        // Build column values (expand as needed)
         const column_values = {
-            'status': { label: taskToApprove.status || "Needs Action" },
-            'priority': { label: taskToApprove.priority || "Medium" },
+            'status': { label: task.status || "Needs Action" },
+            'priority': { label: task.priority || "Medium" },
         };
-        const createItemQuery = `mutation ($item_name: String!, $board_id: ID!, $column_values: JSON) { create_item (board_id: $board_id, item_name: $item_name, column_values: $column_values) { id } }`;
+        const createItemQuery = `
+            mutation ($item_name: String!, $board_id: ID!, $column_values: JSON) {
+                create_item (board_id: $board_id, item_name: $item_name, column_values: $column_values) { id }
+            }`;
         const createVariables = {
             board_id: BOARD_IDS.TASKS,
-            item_name: taskToApprove.task_name,
+            item_name: task.task_name,
             column_values: JSON.stringify(column_values),
         };
-        
-        chrome.runtime.sendMessage({ type: 'mondayApiCall', apiKey: mondayApiKey, query: createItemQuery, variables: createVariables }, (createResponse) => {
-            if (!createResponse?.success) {
-                setStatusMessage({ type: 'error', text: `Failed to create task. ${createResponse?.error}` });
-                return;
-            }
-            const newItemId = createResponse.data.create_item.id;
-            if (taskToApprove.description && taskToApprove.description.trim() !== '') {
-                const updateQuery = `mutation ($item_id: ID!, $body: String!) { create_update (item_id: $item_id, body: $body) { id } }`;
-                const updateVariables = { item_id: newItemId, body: taskToApprove.description };
-                chrome.runtime.sendMessage({ type: 'mondayApiCall', apiKey: mondayApiKey, query: updateQuery, variables: updateVariables }, (updateResponse) => {
-                    if (!updateResponse?.success) {
-                        setStatusMessage({ type: 'error', text: `Task created, but failed to add update: ${updateResponse?.error}` });
-                    } else {
-                        setStatusMessage({ type: 'success', text: `Task "${taskToApprove.task_name}" created with update!` });
-                    }
-                    setProposedTasks(prev => prev.filter(p => p.id !== taskToApprove.id));
-                    handleSyncContext(true);
-                });
-            } else {
-                setStatusMessage({ type: 'success', text: `Task "${taskToApprove.task_name}" created!` });
-                setProposedTasks(prev => prev.filter(p => p.id !== taskToApprove.id));
-                handleSyncContext(true);
-            }
-        });
-    };
-    
-    // --- Helper functions & Event Handlers ---
-    const fileToBase64 = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = reject; });
-    const handleClear = () => { setUserInput(''); setImageFile(null); setImagePreview(null); setProposedTasks([]); setStatusMessage({ type: '', text: '' }); };
-    const handleFileChange = (e) => { const file = e.target.files?.[0]; if (file?.type.startsWith('image/')) { setImageFile(file); const reader = new FileReader(); reader.onloadend = () => setImagePreview(reader.result); reader.readAsDataURL(file); } };
-    const handleTaskChange = (taskId, field, value) => { setProposedTasks(prevTasks => prevTasks.map(task => task.id === taskId ? { ...task, [field]: value } : task)); };
-    const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); };
-    const handleDragEnter = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); };
-    const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); };
-    const handleDrop = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); const file = e.dataTransfer.files?.[0]; if (file?.type.startsWith('image/')) { setImageFile(file); const reader = new FileReader(); reader.onloadend = () => setImagePreview(reader.result); reader.readAsDataURL(file); e.dataTransfer.clearData(); }};
-    const handleRemoveImage = () => { setImageFile(null); setImagePreview(null); const fileInput = document.getElementById('file-upload'); if (fileInput) fileInput.value = ''; };
 
-    const styles = { appContainer: { backgroundColor: '#111827', color: 'white', fontFamily: 'sans-serif', padding: '1rem', boxSizing: 'border-box', height: '100%', display: 'flex', flexDirection: 'column' }, header: { textAlign: 'center', marginBottom: '1rem', flexShrink: 0 }, title: { fontSize: '1.75rem', fontWeight: 'bold', background: 'linear-gradient(to right, #a78bfa, #22d3ee)', WebkitBackgroundClip: 'text', color: 'transparent', marginBottom: '0.25rem' }, subtitle: { color: '#9ca3af', fontSize: '0.875rem' }, statusMessage: (type) => ({ padding: '0.75rem', borderRadius: '0.5rem', marginBottom: '1rem', textAlign: 'center', backgroundColor: type === 'success' ? 'rgba(74, 222, 128, 0.2)' : 'rgba(239, 68, 68, 0.2)', color: type === 'success' ? '#86efac' : '#f87171' }), grid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', flex: 1, minHeight: 0 }, card: { backgroundColor: 'rgba(31, 41, 55, 0.5)', padding: '1rem', borderRadius: '1rem', border: '1px solid #374151', display: 'flex', flexDirection: 'column', gap: '1rem', transition: 'border-color 0.2s', overflowY: 'auto' }, cardDragging: { borderColor: '#a78bfa' }, settingsSummary: { fontSize: '1.125rem', fontWeight: '600', cursor: 'pointer', color: '#d1d5db' }, settingsDetails: { marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem', borderTop: '1px solid #374151', paddingTop: '1rem' }, label: { display: 'block', fontSize: '0.75rem', fontWeight: '500', color: '#9ca3af', marginBottom: '0.25rem' }, input: { width: '100%', backgroundColor: '#111827', border: '1px solid #4b5563', borderRadius: '0.375rem', padding: '0.5rem', boxSizing: 'border-box', color: 'white' }, textarea: { width: '100%', backgroundColor: '#111827', border: '1px solid #4b5563', borderRadius: '0.375rem', padding: '0.75rem', height: '7rem', boxSizing: 'border-box', color: 'white' }, button: { width: '100%', fontWeight: 'bold', padding: '0.75rem 1rem', borderRadius: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', cursor: 'pointer', border: 'none' }, placeholder: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#6b7280', textAlign: 'center', padding: '2rem', border: '2px dashed #374151', borderRadius: '0.5rem' }, taskCard: { backgroundColor: 'rgba(55, 65, 81, 0.5)', padding: '1rem', borderRadius: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }, editableInput: { width: '100%', backgroundColor: 'rgba(17, 24, 39, 0.8)', border: '1px solid #4b5563', borderRadius: '0.375rem', padding: '0.5rem', boxSizing: 'border-box', color: 'white', fontWeight: 'bold', fontSize: '1rem' }, editableTextarea: { width: '100%', backgroundColor: 'rgba(17, 24, 39, 0.8)', border: '1px solid #4b5563', borderRadius: '0.375rem', padding: '0.5rem', boxSizing: 'border-box', color: '#d1d5db', height: '4rem', fontSize: '0.875rem' }, imagePreviewContainer: { position: 'relative', marginTop: '1rem' }, removeImageButton: { position: 'absolute', top: '0.5rem', right: '0.5rem', background: 'rgba(0,0,0,0.6)', color: 'white', border: 'none', borderRadius: '50%', width: '1.5rem', height: '1.5rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', lineHeight: '1rem' }};
+        chrome.runtime.sendMessage(
+            { type: 'mondayApiCall', apiKey: mondayApiKey, query: createItemQuery, variables: createVariables },
+            (createResponse) => {
+                if (!createResponse?.success) {
+                    setStatusMessage({ type: 'error', text: `Failed to create task. ${createResponse?.error}` });
+                    return;
+                }
+                const newItemId = createResponse.data.create_item.id;
+                if (task.description && task.description.trim() !== '') {
+                    const updateQuery = `
+                        mutation ($item_id: ID!, $body: String!) {
+                            create_update (item_id: $item_id, body: $body) { id }
+                        }`;
+                    const updateVariables = { item_id: newItemId, body: task.description };
+                    chrome.runtime.sendMessage(
+                        { type: 'mondayApiCall', apiKey: mondayApiKey, query: updateQuery, variables: updateVariables },
+                        (updateResponse) => {
+                            if (!updateResponse?.success) {
+                                setStatusMessage({ type: 'error', text: `Task created, but failed to add update: ${updateResponse?.error}` });
+                            } else {
+                                setStatusMessage({ type: 'success', text: `Task "${task.task_name}" created with update!` });
+                            }
+                            setProposedTasks(prev => prev.filter(p => p.id !== task.id));
+                            handleSyncContext(true); // refresh context if you want
+                        }
+                    );
+                } else {
+                    setStatusMessage({ type: 'success', text: `Task "${task.task_name}" created!` });
+                    setProposedTasks(prev => prev.filter(p => p.id !== task.id));
+                    handleSyncContext(true);
+                }
+            }
+        );
+    };
+
+    // --- Drag & Drop Handlers ---
+    const handleDragOver = (e) => { e.preventDefault(); setIsDragging(true); };
+    const handleDragLeave = (e) => { e.preventDefault(); setIsDragging(false); };
+    const handleDrop = (e) => {
+        e.preventDefault();
+        setIsDragging(false);
+        const file = e.dataTransfer.files?.[0];
+        if (file?.type.startsWith('image/')) {
+            setImageFile(file);
+            const reader = new FileReader();
+            reader.onloadend = () => setImagePreview(reader.result);
+            reader.readAsDataURL(file);
+        }
+    };
+
+    // --- Helper: File to Base64 ---
+    const fileToBase64 = (file) => new Promise((resolve, reject) => { const reader = new FileReader(); reader.readAsDataURL(file); reader.onload = () => resolve(reader.result.split(',')[1]); reader.onerror = reject; });
 
     // --- RENDER ---
     return (
-        <div style={styles.appContainer}>
-            <header style={styles.header}><h1 style={styles.title}>Autonomous AI Assistant</h1><p style={styles.subtitle}>Your intelligent gateway to monday.com</p></header>
-            {statusMessage.text && (<div style={styles.statusMessage(statusMessage.type)}>{statusMessage.text}</div>)}
-            <div style={styles.grid}>
-                <div style={{...styles.card, ...(isDragging ? styles.cardDragging : {})}} onDragOver={handleDragOver} onDragEnter={handleDragEnter} onDragLeave={handleDragLeave} onDrop={handleDrop}>
-                    <div style={{display: 'flex', alignItems: 'flex-start', gap: '1rem'}}>
-                        <details style={{flex: 1}}>
-                            <summary style={styles.settingsSummary}>Settings</summary>
-                            <div style={styles.settingsDetails}>
-                                <div><label style={styles.label}>monday.com API Key</label><input type="password" value={mondayApiKey} onChange={e => setMondayApiKey(e.target.value)} style={styles.input} placeholder="Enter your monday.com key" /></div>
-                                <div><label style={styles.label}>Google AI API Key</label><input type="password" value={geminiApiKey} onChange={e => setGeminiApiKey(e.target.value)} style={styles.input} placeholder="Enter your Google AI key" /></div>
-                                <button onClick={handleSaveSettings} style={{...styles.button, backgroundColor: '#8b5cf6', color: 'white'}}>Save Settings</button>
-                            </div>
-                        </details>
-                        <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center'}}>
-                            <button onClick={() => handleSyncContext(false)} disabled={isSyncing} style={{...styles.button, backgroundColor: '#06b6d4', padding: '0.5rem 1rem', color: 'white'}}>
-                                <SyncIcon isSyncing={isSyncing} />
-                                <span style={{marginLeft: '0.5rem'}}>Sync Now</span>
-                            </button>
-                            {lastSyncTime && <p style={{fontSize: '0.75rem', color: '#6b7280', marginTop: '0.5rem', textAlign: 'center'}}>Synced: {lastSyncTime.toLocaleTimeString()}</p>}
-                        </div>
-                    </div>
-                    <div><h2 style={{fontSize: '1.125rem', fontWeight: '600', color: '#d1d5db', marginBottom: '0.75rem'}}>1. Provide Input</h2><textarea value={userInput} onChange={e => setUserInput(e.target.value)} style={styles.textarea} placeholder="Describe a task, paste a transcript, or drag an image..."/></div>
-                    <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem'}}>
-                        <label htmlFor="file-upload" style={{...styles.button, flex: 1, backgroundColor: '#374151', color: '#d1d5db'}}><UploadIcon /><span>{imageFile ? "Image Added" : "Add Image"}</span></label>
-                        <input id="file-upload" type="file" style={{display: 'none'}} onChange={handleFileChange} accept="image/*" />
-                    </div>
-                    {imagePreview && (<div style={styles.imagePreviewContainer}><img src={imagePreview} alt="Preview" style={{borderRadius: '0.5rem', maxHeight: '10rem', width: '100%', objectFit: 'contain'}} /><button onClick={handleRemoveImage} style={styles.removeImageButton}>&times;</button></div>)}
-                    <button onClick={handleGenerateTask} disabled={isLoading || !mondayApiKey || !geminiApiKey} style={{...styles.button, background: 'linear-gradient(to right, #8b5cf6, #22d3ee)', color: 'white', marginTop: 'auto'}}>{isLoading ? <Spinner /> : <BrainIcon />}<span>Generate Tasks</span></button>
+        <div style={{ background: '#101927', minHeight: '100vh', color: 'white', fontFamily: 'sans-serif', padding: 32 }}>
+            <h1 style={{ fontWeight: 700, fontSize: '2.3rem', background: 'linear-gradient(90deg,#a78bfa,#22d3ee)', WebkitBackgroundClip: 'text', color: 'transparent' }}>Autonomous AI Assistant</h1>
+            <div style={{ color: '#a5b4fc', marginBottom: 16 }}>Your intelligent gateway to monday.com</div>
+
+            <details open={showSettings} style={{ marginBottom: 12 }} onToggle={e => setShowSettings(e.target.open)}>
+                <summary style={{ fontWeight: 700, fontSize: '1.3rem', cursor: 'pointer' }}>Settings</summary>
+                <div style={{ margin: '12px 0' }}>
+                    <label style={{ fontSize: 13 }}>Monday.com API Key</label>
+                    <input type="password" value={mondayApiKey} onChange={e => setMondayApiKey(e.target.value)} style={{ width: '100%', background: '#181f2e', color: '#a5b4fc', borderRadius: 6, border: '1px solid #444', marginBottom: 8, padding: 7, fontSize: 14 }} />
+                    <label style={{ fontSize: 13 }}>Google AI API Key</label>
+                    <input type="password" value={geminiApiKey} onChange={e => setGeminiApiKey(e.target.value)} style={{ width: '100%', background: '#181f2e', color: '#a5b4fc', borderRadius: 6, border: '1px solid #444', marginBottom: 8, padding: 7, fontSize: 14 }} />
+                    <button onClick={handleSaveSettings} style={{ padding: '8px 24px', background: '#a78bfa', color: '#222', borderRadius: 8, border: 'none', fontWeight: 600, fontSize: 16, marginTop: 4 }}>Save Settings</button>
+                    {lastSyncTime && <div style={{ color: '#67e8f9', fontSize: 12, marginTop: 4 }}>Synced: {lastSyncTime.toLocaleTimeString()}</div>}
                 </div>
-                <div style={styles.card}>
-                    <h2 style={{fontSize: '1.125rem', fontWeight: '600', color: '#d1d5db', marginBottom: '0.75rem'}}>2. Validate & Create Tasks</h2>
-                    {isLoading ? (<div style={styles.placeholder}><Spinner /><p style={{marginTop: '1rem'}}>AI is analyzing...</p></div>) : proposedTasks.length === 0 ? (<div style={styles.placeholder}><BrainIcon /><p style={{marginTop: '0.5rem'}}>Proposed tasks will appear here.</p></div>) : (
-                        <div style={{display: 'flex', flexDirection: 'column', gap: '1rem'}}>
+            </details>
+
+            {statusMessage.text && (
+                <div style={{
+                    padding: 12, borderRadius: 7, margin: '16px 0', fontWeight: 500, background: statusMessage.type === 'success' ? '#164e3b' : '#7f1d1d', color: statusMessage.type === 'success' ? '#4ade80' : '#f87171'
+                }}>{statusMessage.text}</div>
+            )}
+
+            <details open={showCompanies} style={{ marginBottom: 18 }} onToggle={e => setShowCompanies(e.target.open)}>
+                <summary style={{ fontWeight: 700, fontSize: '1.15rem', color: '#c4b5fd', cursor: 'pointer' }}>Companies loaded from Monday (the AI sees these)</summary>
+                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {companiesContext.map(c => <li key={c.code}><b>{c.name}</b> <span style={{ color: '#6ee7b7' }}>({c.code})</span></li>)}
+                </ul>
+                {companiesContext.length === 0 && <div style={{ color: '#f87171' }}>No companies loaded! Check your API key or sync again.</div>}
+            </details>
+
+            {/* Input/Task Panels */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+                <div
+                    style={{
+                        background: '#181f2e',
+                        borderRadius: 10,
+                        padding: 20,
+                        border: isDragging ? '2px dashed #a78bfa' : 'none',
+                        transition: 'border .2s'
+                    }}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                >
+                    <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 7 }}>1. Provide Input</div>
+                    <textarea
+                        value={userInput}
+                        onChange={e => setUserInput(e.target.value)}
+                        style={{
+                            width: '100%',
+                            background: '#222b3b',
+                            border: '1px solid #222',
+                            color: '#b8c1ec',
+                            padding: 12,
+                            borderRadius: 7,
+                            fontSize: 15,
+                            minHeight: 100
+                        }}
+                        placeholder="Describe a task, paste a transcript, or drag an image..."
+                    />
+                    <div style={{ margin: '12px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <label htmlFor="file-upload" style={{ background: '#313a54', color: '#b8c1ec', padding: '8px 16px', borderRadius: 7, cursor: 'pointer' }}>{imageFile ? "Image Added" : "Add Image"}</label>
+                        <input id="file-upload" type="file" style={{ display: 'none' }} onChange={e => {
+                            const file = e.target.files?.[0];
+                            if (file?.type.startsWith('image/')) {
+                                setImageFile(file);
+                                const reader = new FileReader();
+                                reader.onloadend = () => setImagePreview(reader.result);
+                                reader.readAsDataURL(file);
+                            }
+                        }} accept="image/*" />
+                        {imagePreview && <button onClick={() => { setImageFile(null); setImagePreview(null); }} style={{ marginLeft: 8, background: '#991b1b', color: '#fff', borderRadius: 7, border: 'none', padding: '6px 12px', cursor: 'pointer' }}>Remove</button>}
+                        <span style={{ color: '#9ca3af', fontSize: 13, marginLeft: 'auto' }}>{isDragging ? "Drop your image here..." : "You can also drag & drop an image"}</span>
+                    </div>
+                    {imagePreview && <img src={imagePreview} alt="Preview" style={{ borderRadius: 7, maxHeight: 120, width: '100%', objectFit: 'contain', marginBottom: 12 }} />}
+                    <button onClick={handleGenerateTask} disabled={isLoading || !mondayApiKey || !geminiApiKey} style={{ width: '100%', background: 'linear-gradient(to right, #a78bfa, #22d3ee)', color: '#222', border: 'none', borderRadius: 8, fontWeight: 700, fontSize: 17, padding: '13px 0', marginTop: 8 }}>{isLoading ? 'Thinking...' : 'Generate Tasks'}</button>
+                </div>
+                <div style={{ background: '#181f2e', borderRadius: 10, padding: 20 }}>
+                    <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: 7 }}>2. Validate & Create Tasks</div>
+                    {isLoading ? (
+                        <div style={{ color: '#a5b4fc', fontWeight: 500, textAlign: 'center', margin: 28 }}>AI is analyzing...</div>
+                    ) : proposedTasks.length === 0 ? (
+                        <div style={{ color: '#475569', fontWeight: 500, textAlign: 'center', margin: 28 }}>Proposed tasks will appear here.</div>
+                    ) : (
+                        <div>
                             {proposedTasks.map((task) => (
-                                <div key={task.id} style={styles.taskCard}>
-                                    <input type="text" value={task.task_name} onChange={(e) => handleTaskChange(task.id, 'task_name', e.target.value)} style={styles.editableInput} />
-                                    <textarea placeholder="Add a description... (this will be an update)" value={task.description || ''} onChange={(e) => handleTaskChange(task.id, 'description', e.target.value)} style={styles.editableTextarea} />
-                                    <div style={{display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem'}}>
-                                        <div><label style={{...styles.label}}>Status</label><select style={{...styles.input, padding: '0.25rem', fontSize: '0.75rem'}} value={task.status} onChange={(e) => handleTaskChange(task.id, 'status', e.target.value)}>{taskBoardOptions.status.map(label => (<option key={label} value={label}>{label}</option>))}</select></div>
-                                        <div><label style={{...styles.label}}>Priority</label><select style={{...styles.input, padding: '0.25rem', fontSize: '0.75rem'}} value={task.priority} onChange={(e) => handleTaskChange(task.id, 'priority', e.target.value)}>{taskBoardOptions.priority.map(label => (<option key={label} value={label}>{label}</option>))}</select></div>
+                                <div key={task.id} style={{ background: '#222b3b', borderRadius: 7, padding: 13, marginBottom: 14 }}>
+                                    <input type="text" value={task.task_name} readOnly style={{ width: '100%', background: 'rgba(17,24,39,0.8)', color: '#facc15', fontWeight: 700, border: '1px solid #444', borderRadius: 5, padding: 7, fontSize: 16, marginBottom: 6 }} />
+                                    <textarea value={task.description || ''} readOnly style={{ width: '100%', background: 'rgba(17,24,39,0.8)', color: '#e0e7ef', border: '1px solid #333', borderRadius: 5, padding: 7, fontSize: 14, minHeight: 48 }} />
+                                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                                        <button onClick={() => handleApproveTask(task)} style={{ flex: 1, background: '#16a34a', color: 'white', border: 'none', borderRadius: 6, padding: '10px 0', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}>Approve</button>
+                                        <button onClick={() => setProposedTasks(prev => prev.filter(p => p.id !== task.id))} style={{ flex: 1, background: '#dc2626', color: 'white', border: 'none', borderRadius: 6, padding: '10px 0', fontWeight: 600, fontSize: 15, cursor: 'pointer' }}>Remove</button>
                                     </div>
-                                    <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem'}}><button onClick={() => handleApproveTask(task)} style={{...styles.button, flex: 1, backgroundColor: '#16a34a', color: 'white'}}>Approve</button><button onClick={() => setProposedTasks(p => p.filter(t => t.id !== task.id))} style={{...styles.button, flex: 1, backgroundColor: '#dc2626', color: 'white'}}>Remove</button></div>
                                 </div>
                             ))}
-                            <button onClick={handleClear} style={{...styles.button, backgroundColor: '#4b5563', color: 'white', marginTop: '1rem'}}>Clear All</button>
+                            <button onClick={() => setProposedTasks([])} style={{ width: '100%', background: '#374151', color: 'white', border: 'none', borderRadius: 8, padding: '11px 0', fontWeight: 700, marginTop: 14 }}>Clear All</button>
                         </div>
                     )}
                 </div>
