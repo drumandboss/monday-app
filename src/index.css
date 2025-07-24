@@ -5,6 +5,10 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  
+  /* These two lines fix the size */
+  width: 800px;
+  height: 600px;
 }
 
 code {
